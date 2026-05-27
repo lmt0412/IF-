@@ -1,6 +1,18 @@
 import pandas as pd
 
-from factors import build_factors
+from factors import build_factors, get_factor_columns
+from factor_analysis import run_factor_analysis
+from model import run_all_models
+from backtest import run_all_backtests
+
+
+# =====================
+# 配置：预测目标（可选 target_1d / target_3d / target_5d）
+# SIGNAL_THRESHOLD：过滤最弱信号，0=不过滤，0.33=最弱33%置空仓
+# =====================
+
+TARGET = "target_1d"
+SIGNAL_FILTER = True   # True = 预测强度 < 0.5×std 时空仓，False = 每天都持仓
 
 
 # =====================
@@ -18,51 +30,27 @@ df = build_factors(df)
 
 
 # =====================
-# feature list
+# factor list & basic info
 # =====================
 
-features = [
-    "mom_5",
-    "mom_20",
-    "vol_20",
-    "bias_20",
-    "macd_factor",
-    "macd_slope",
-    "turnover_factor",
-    "turnover_z20",
-    "basis_factor",
-    "basis_z20",
-    "basis_change",
-    "pe_factor",
-    "pe_z20",
-    "pe_change",
-    "pe_rank_60"
-]
+price_volume_factors, fundamental_factors, interaction_factors = get_factor_columns()
+all_factors = [f for f in price_volume_factors + fundamental_factors + interaction_factors if f in df.columns]
+
+print(df[all_factors + [TARGET]].head())
+
+df_clean = df.dropna(subset=all_factors + [TARGET]).reset_index(drop=True)
+selected_features = run_factor_analysis(df_clean, all_factors, target_col=TARGET, output_dir="Results/factor")
 
 
 # =====================
-# print basic info
+# model
 # =====================
 
-print(df_model.head())
-
-print("\n")
-print(df_model.columns)
-
-print("\n")
-print(df_model[features + ["target_5d"]].head())
+run_all_models(df, selected_features, target_col=TARGET, output_dir="Results/model")
 
 
 # =====================
-# train test split
+# backtest
 # =====================
 
-split_idx = int(len(df_model) * 0.7)
-
-train_df = df_model.iloc[:split_idx]
-test_df = df_model.iloc[split_idx:]
-
-
-print("\n")
-print("train size:", len(train_df))
-print("test size:", len(test_df))
+run_all_backtests(df, selected_features, target_col=TARGET, signal_filter=SIGNAL_FILTER, output_dir="Results/backtest")
