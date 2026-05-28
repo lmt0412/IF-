@@ -213,3 +213,4 @@ if __name__ == "__main__":
     df_clean = df.dropna(subset=all_factors + [TARGET]).reset_index(drop=True)
 
     run_factor_analysis(df_clean, all_factors, target_col=TARGET)
+
