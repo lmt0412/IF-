@@ -4,6 +4,7 @@ from factors import build_factors, get_factor_columns
 from factor_analysis import run_factor_analysis
 from model import run_all_models
 from backtest import run_all_backtests
+from report import generate_report
 
 
 # =====================
@@ -12,7 +13,10 @@ from backtest import run_all_backtests
 # =====================
 
 TARGET = "target_1d"
-SIGNAL_FILTER = True   # True = 预测强度 < 0.5×std 时空仓，False = 每天都持仓
+SIGNAL_FILTER = True      # True = 预测强度 < 0.5×std 时空仓，False = 每天都持仓
+SHORT_MULTIPLIER = 3.0    # 做空门槛 = 做多门槛 × 此倍数，越大越难做空
+LONG_LEVERAGE = 3.0       # 做多时的杠杆倍数，1.0 = 无杠杆
+SHORT_LEVERAGE = 2.0      # 做空时的杠杆倍数，1.0 = 无杠杆
 
 
 # =====================
@@ -53,4 +57,16 @@ run_all_models(df, selected_features, target_col=TARGET, output_dir="Results/mod
 # backtest
 # =====================
 
-run_all_backtests(df, selected_features, target_col=TARGET, signal_filter=SIGNAL_FILTER, output_dir="Results/backtest")
+run_all_backtests(df, selected_features, target_col=TARGET, signal_filter=SIGNAL_FILTER, short_multiplier=SHORT_MULTIPLIER, long_leverage=LONG_LEVERAGE, short_leverage=SHORT_LEVERAGE, output_dir="Results/backtest")
+
+
+# =====================
+# report
+# =====================
+
+generate_report(
+    target_col=TARGET,
+    signal_filter=SIGNAL_FILTER,
+    short_multiplier=SHORT_MULTIPLIER,
+    output_path="Results/report.pdf",
+)

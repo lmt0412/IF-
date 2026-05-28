@@ -15,15 +15,17 @@ from model import LSTMModel, make_sequences
 
 # =====================
 # 生成交易信号
-# 预测收益 > 0 → 做多(+1)，< 0 → 做空(-1)
-# signal_filter=True 时：|y_pred| < 0.5 * std(y_pred) 视为噪声 → 空仓(0)
+# signal_filter=True 时：|y_pred| < 0.5*std 视为噪声 → 空仓(0)
+# short_multiplier：做空门槛 = 做多门槛 × short_multiplier，越大越难做空
 # =====================
 
-def predictions_to_signals(y_pred, signal_filter=False):
+def predictions_to_signals(y_pred, signal_filter=False, short_multiplier=1.0, long_leverage=1.0, short_leverage=1.0):
     if signal_filter:
         noise_band = 0.5 * np.std(y_pred)
-        return np.where(y_pred > noise_band, 1, np.where(y_pred < -noise_band, -1, 0))
-    return np.where(y_pred > 0, 1, -1)
+        long_side  = y_pred >  noise_band
+        short_side = y_pred < -(noise_band * short_multiplier)
+        return np.where(long_side, long_leverage, np.where(short_side, -short_leverage, 0))
+    return np.where(y_pred > 0, long_leverage, -short_leverage)
 
 
 # =====================
@@ -58,7 +60,8 @@ def calc_performance(result_df, model_name):
     drawdown = (cumulative - rolling_max) / rolling_max
     max_drawdown = drawdown.min()
 
-    win_rate = (ret > 0).mean()
+    trading_days = ret[ret != 0]
+    win_rate = (trading_days > 0).mean() if len(trading_days) > 0 else 0.0
     total_return = cumulative.iloc[-1] - 1
 
     return {
@@ -82,7 +85,7 @@ def split_train_test(df, selected_features, target_col="target_1d", test_ratio=0
     return df_model.iloc[:split_idx], df_model.iloc[split_idx:]
 
 
-def backtest_ridge(df, selected_features, target_col="target_1d", signal_filter=False):
+def backtest_ridge(df, selected_features, target_col="target_1d", signal_filter=False, short_multiplier=1.0, long_leverage=1.0, short_leverage=1.0):
     train, test = split_train_test(df, selected_features, target_col)
 
     scaler = StandardScaler()
@@ -93,11 +96,11 @@ def backtest_ridge(df, selected_features, target_col="target_1d", signal_filter=
     model.fit(X_train, train[target_col].values)
     y_pred = model.predict(X_test)
 
-    signals = predictions_to_signals(y_pred, signal_filter)
+    signals = predictions_to_signals(y_pred, signal_filter, short_multiplier, long_leverage, short_leverage)
     return run_backtest(signals, test[target_col].values, test["日期"].values), y_pred
 
 
-def backtest_logistic(df, selected_features, target_col="target_1d", signal_filter=False):
+def backtest_logistic(df, selected_features, target_col="target_1d", signal_filter=False, short_multiplier=1.0, long_leverage=1.0, short_leverage=1.0):
     train, test = split_train_test(df, selected_features, target_col)
 
     scaler = StandardScaler()
@@ -112,11 +115,11 @@ def backtest_logistic(df, selected_features, target_col="target_1d", signal_filt
     # 用概率衡量置信度：score = P(涨) - 0.5，范围 (-0.5, 0.5)
     proba = model.predict_proba(X_test)[:, 1]
     scores = proba - 0.5
-    signals = predictions_to_signals(scores, signal_filter)
+    signals = predictions_to_signals(scores, signal_filter, short_multiplier, long_leverage, short_leverage)
     return run_backtest(signals, test[target_col].values, test["日期"].values), scores
 
 
-def backtest_xgboost(df, selected_features, target_col="target_1d", signal_filter=False):
+def backtest_xgboost(df, selected_features, target_col="target_1d", signal_filter=False, short_multiplier=1.0, long_leverage=1.0, short_leverage=1.0):
     train, test = split_train_test(df, selected_features, target_col)
 
     X_tr_all = train[selected_features].values
@@ -133,11 +136,11 @@ def backtest_xgboost(df, selected_features, target_col="target_1d", signal_filte
     model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
     y_pred = model.predict(test[selected_features].values)
 
-    signals = predictions_to_signals(y_pred, signal_filter)
+    signals = predictions_to_signals(y_pred, signal_filter, short_multiplier, long_leverage, short_leverage)
     return run_backtest(signals, test[target_col].values, test["日期"].values), y_pred
 
 
-def backtest_lstm(df, selected_features, target_col="target_1d", signal_filter=False, lookback=10, epochs=100):
+def backtest_lstm(df, selected_features, target_col="target_1d", signal_filter=False, short_multiplier=1.0, long_leverage=1.0, short_leverage=1.0, lookback=10, epochs=100):
     train, test = split_train_test(df, selected_features, target_col)
 
     scaler = StandardScaler()
@@ -166,7 +169,7 @@ def backtest_lstm(df, selected_features, target_col="target_1d", signal_filter=F
     with torch.no_grad():
         y_pred = model(X_test_t).numpy()
 
-    signals = predictions_to_signals(y_pred, signal_filter)
+    signals = predictions_to_signals(y_pred, signal_filter, short_multiplier, long_leverage, short_leverage)
     return run_backtest(signals, y_test_seq, test["日期"].values[lookback:]), y_pred
 
 
@@ -174,15 +177,15 @@ def backtest_lstm(df, selected_features, target_col="target_1d", signal_filter=F
 # 汇总运行所有回测
 # =====================
 
-def run_all_backtests(df, selected_features, target_col="target_1d", signal_filter=False, output_dir="Results/backtest"):
+def run_all_backtests(df, selected_features, target_col="target_1d", signal_filter=False, short_multiplier=1.0, long_leverage=1.0, short_leverage=1.0, output_dir="Results/backtest"):
     print("\n" + "=" * 50)
-    print(f"策略回测（target: {target_col}，信号过滤: {'开' if signal_filter else '关'}，后30%为测试集）")
+    print(f"策略回测（target: {target_col}，信号过滤: {'开' if signal_filter else '关'}，做空倍数: {short_multiplier}x，后30%为测试集）")
     print("=" * 50)
 
-    ridge_result, _ = backtest_ridge(df, selected_features, target_col, signal_filter)
-    logistic_result, _ = backtest_logistic(df, selected_features, target_col, signal_filter)
-    xgb_result, _ = backtest_xgboost(df, selected_features, target_col, signal_filter)
-    lstm_result, _ = backtest_lstm(df, selected_features, target_col, signal_filter)
+    ridge_result, _ = backtest_ridge(df, selected_features, target_col, signal_filter, short_multiplier, long_leverage, short_leverage)
+    logistic_result, _ = backtest_logistic(df, selected_features, target_col, signal_filter, short_multiplier, long_leverage, short_leverage)
+    xgb_result, _ = backtest_xgboost(df, selected_features, target_col, signal_filter, short_multiplier, long_leverage, short_leverage)
+    lstm_result, _ = backtest_lstm(df, selected_features, target_col, signal_filter, short_multiplier, long_leverage, short_leverage)
 
     perf_ridge = calc_performance(ridge_result, "Ridge")
     perf_logistic = calc_performance(logistic_result, "Logistic")
@@ -204,7 +207,7 @@ def run_all_backtests(df, selected_features, target_col="target_1d", signal_filt
 
     benchmark = xgb_result["累计基准"]
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    _, ax = plt.subplots(figsize=(12, 6))
     ax.plot(ridge_result["累计策略"].values, label="Ridge")
     ax.plot(logistic_result["累计策略"].values, label="Logistic")
     ax.plot(xgb_result["累计策略"].values, label="XGBoost")
